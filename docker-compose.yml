@@ -1,0 +1,86 @@
+# =====================================================================
+# Voice-RAG Dev Stack (pgvector enabled)
+# =====================================================================
+# Services:
+#   postgres        - Postgres 15 + pgvector, host port 5436
+#   app             - Next.js dev server, host port 3000
+#   voice-agent     - LiveKit Agents worker (RAG-aware)
+#   crawler-service - FastAPI + Scrapy + Playwright, host port 8080
+# =====================================================================
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: voicerag
+    ports:
+      - "5436:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # On a brand-new data dir, postgres auto-runs every *.sql in
+      # /docker-entrypoint-initdb.d/ — we use it to install the
+      # pgvector extension BEFORE the app runs `prisma db push`.
+      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d voicerag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: rag-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/voicerag?schema=public
+      NEXTAUTH_URL: http://localhost:3000
+      IN_DOCKER: "1"
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - app_node_modules:/app/node_modules
+      - app_next:/app/.next
+
+  voice-agent:
+    build:
+      context: ./voice-agent
+      dockerfile: Dockerfile
+    container_name: voice-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RAG_API_URL: "http://app:3000"
+    depends_on:
+      - app
+
+  crawler-service:
+    build:
+      context: ./crawler-service
+    container_name: crawler
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: INFO
+      CRAWL_TIMEOUT_SECONDS: "120"
+    ports:
+      - "8081:8080"
+
+volumes:
+  postgres_data:
+    driver: local
+  app_node_modules:
+    driver: local
+  app_next:
+    driver: local

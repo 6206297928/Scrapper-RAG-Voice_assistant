@@ -1,0 +1,1 @@
+"""Universal Crawler – Scrapy + Playwright powered page-architecture analyser."""

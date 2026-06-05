@@ -1,0 +1,11 @@
+# LiveKit Agents Framework
+livekit-agents[silero,turn-detector]>=1.3.0
+
+# Plugin: Groq (STT + LLM + TTS)
+livekit-plugins-groq>=1.3.0
+
+# Environment management
+python-dotenv>=1.0.0
+
+# Async HTTP client (for API calls)
+aiohttp>=3.9.0

@@ -1,0 +1,91 @@
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../lib/generated/prisma"
+  previewFeatures = ["postgresqlExtensions", "driverAdapters"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ── Only the models the crawler needs ──────────────────────
+
+model Company {
+  id              String          @id @default(cuid())
+  userId          String          @unique
+  name            String
+  slug            String          @unique
+  website         String?
+  description     String?
+  logoUrl         String?
+  apiKey          String          @unique @default(cuid())
+  apiKeyCreatedAt DateTime        @default(now())
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  documentChunks  DocumentChunk[]
+  websitePages    WebsitePage[]
+  crawlJobs       CrawlJob[]
+}
+
+model DocumentChunk {
+  id          String                      @id @default(cuid())
+  companyId   String
+  botConfigId String?
+  sourceType  String
+  sourceId    String?
+  sourceUrl   String?
+  title       String?
+  content     String
+  embedding   Unsupported("vector(768)")?
+  contentHash String
+  chunkIndex  Int                         @default(0)
+  anchor      String?
+  metadata    Json?
+  createdAt   DateTime                    @default(now())
+  updatedAt   DateTime                    @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([contentHash])
+  @@index([sourceType, sourceId])
+}
+
+model WebsitePage {
+  id            String    @id @default(cuid())
+  companyId     String
+  url           String
+  title         String?
+  status        String    @default("pending")
+  lastCrawledAt DateTime?
+  contentHash   String?
+  errorMessage  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, url])
+  @@index([companyId])
+  @@index([status])
+}
+
+model CrawlJob {
+  id          String    @id @default(cuid())
+  companyId   String
+  domain      String
+  status      String    @default("queued")
+  triggeredBy String
+  totalPages  Int       @default(0)
+  donePages   Int       @default(0)
+  failedPages Int       @default(0)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([status])
+}

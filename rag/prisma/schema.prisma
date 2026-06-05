@@ -1,0 +1,678 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  name          String?
+  avatarUrl     String?
+  role          UserRole       @default(USER)
+  emailVerified DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  auditLogs     AuditLog[]
+  company       Company?
+  notifications Notification[]
+}
+
+model Company {
+  id              String            @id @default(cuid())
+  userId          String            @unique
+  name            String
+  slug            String            @unique
+  website         String?
+  description     String?
+  logoUrl         String?
+  apiKey          String            @unique @default(cuid())
+  apiKeyCreatedAt DateTime          @default(now())
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  auditLogs       AuditLog[]
+  botConfigs      BotConfig[]
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  container       CompanyContainer?
+  conversations   Conversation[]
+  leads           Lead[]
+  subscription    Subscription?
+  tokenUsage      TokenUsage[]
+}
+
+model Subscription {
+  id                    String             @id @default(cuid())
+  companyId             String             @unique
+  plan                  Plan               @default(FREE)
+  previousPlan          Plan?
+  status                SubscriptionStatus @default(ACTIVE)
+  conversationsLimit    Int                @default(100)
+  conversationsUsed     Int                @default(0)
+  tokensLimit           Int                @default(100000)
+  tokensUsed            Int                @default(0)
+  botsLimit             Int                @default(1)
+  billingCycleStart     DateTime           @default(now())
+  billingCycleEnd       DateTime?
+  trialEndsAt           DateTime?
+  canceledAt            DateTime?
+  cancelReason          String?
+  stripeCustomerId      String?            @unique
+  stripeSubscriptionId  String?            @unique
+  stripePriceId         String?
+  stripePaymentMethodId String?
+  usageAlertSent80      Boolean            @default(false)
+  usageAlertSent100     Boolean            @default(false)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  invoices              Invoice[]
+  payments              Payment[]
+  company               Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model Payment {
+  id                    String        @id @default(cuid())
+  subscriptionId        String
+  amount                Int
+  currency              String        @default("usd")
+  status                PaymentStatus
+  stripePaymentIntentId String?       @unique
+  stripeChargeId        String?
+  stripeInvoiceId       String?
+  paymentMethod         PaymentMethod
+  cardLast4             String?
+  cardBrand             String?
+  periodStart           DateTime
+  periodEnd             DateTime
+  description           String?
+  failureReason         String?
+  receiptUrl            String?
+  paidAt                DateTime?
+  createdAt             DateTime      @default(now())
+  subscription          Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, createdAt])
+  @@index([status])
+}
+
+model Invoice {
+  id               String        @id @default(cuid())
+  subscriptionId   String
+  invoiceNumber    String        @unique
+  amount           Int
+  currency         String        @default("usd")
+  status           InvoiceStatus
+  stripeInvoiceId  String?       @unique
+  lineItems        Json
+  periodStart      DateTime
+  periodEnd        DateTime
+  dueDate          DateTime
+  paidAt           DateTime?
+  pdfUrl           String?
+  hostedInvoiceUrl String?
+  createdAt        DateTime      @default(now())
+  subscription     Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, createdAt])
+  @@index([status])
+}
+
+model CompanyContainer {
+  id                 String          @id @default(cuid())
+  companyId          String          @unique
+  containerId        String
+  containerName      String
+  imageVersion       String          @default("latest")
+  port               Int
+  internalPort       Int             @default(3001)
+  url                String
+  status             ContainerStatus @default(PENDING)
+  healthStatus       HealthStatus    @default(UNKNOWN)
+  lastHealthCheck    DateTime?
+  healthCheckCount   Int             @default(0)
+  failedHealthChecks Int             @default(0)
+  cpuUsagePercent    Float?
+  memoryUsageMb      Float?
+  memoryLimitMb      Float?
+  deployedAt         DateTime        @default(now())
+  restartedAt        DateTime?
+  restartCount       Int             @default(0)
+  lastError          String?
+  errorCount         Int             @default(0)
+  configHash         String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  company            Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([healthStatus])
+}
+
+model BotConfig {
+  id              String               @id @default(cuid())
+  companyId       String
+  name            String
+  botName         String               @default("Assistant")
+  botAvatarUrl    String?
+  botAvatarType   AvatarType           @default(IMAGE)
+  welcomeMessage  String               @default("Hi! How can I help you today?")
+  primaryColor    String               @default("#6366f1")
+  position        WidgetPosition       @default(BOTTOM_RIGHT)
+  configJson      Json
+  version         Int                  @default(1)
+  isActive        Boolean              @default(false)
+  isDraft         Boolean              @default(true)
+  allowedDomains  String[]
+  environment     Environment          @default(DEVELOPMENT)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  publishedAt     DateTime?
+  company         Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  versions        BotConfigVersion[]
+  conversations   Conversation[]
+  knowledgeChunks BotKnowledgeChunk[]
+  ingests         BotKnowledgeIngest[]
+
+  @@index([companyId, isActive])
+  @@index([companyId, environment])
+}
+
+/// Per-page chunk of a bot's crawled knowledge base. Embedded with
+/// OpenAI text-embedding-3-small (1536 dim) and retrieved at query time
+/// via pgvector cosine distance.
+///
+/// The `embedding` column type is created by the migration SQL
+/// (Prisma sees it as Unsupported); pgvector's `<=>` operator is used
+/// directly in raw queries in src/lib/search.ts.
+model BotKnowledgeChunk {
+  id          String                       @id @default(cuid())
+  botId       String
+  bot         BotConfig                    @relation(fields: [botId], references: [id], onDelete: Cascade)
+  pageUrl     String
+  pageTitle   String
+  chunkIndex  Int
+  chunkText   String
+  tokenCount  Int                          @default(0)
+  embedding   Unsupported("vector(1536)")
+  createdAt   DateTime                     @default(now())
+
+  @@unique([botId, pageUrl, chunkIndex])
+  @@index([botId])
+  @@index([botId, pageUrl])
+}
+
+/// One row per crawl/ingest run, used for re-ingest gating and observability.
+model BotKnowledgeIngest {
+  id            String       @id @default(cuid())
+  botId         String
+  bot           BotConfig    @relation(fields: [botId], references: [id], onDelete: Cascade)
+  seedUrl       String
+  status        IngestStatus @default(PENDING)
+  pagesCrawled  Int          @default(0)
+  chunksStored  Int          @default(0)
+  errorMessage  String?
+  startedAt     DateTime     @default(now())
+  finishedAt    DateTime?
+
+  @@index([botId, startedAt])
+}
+
+enum IngestStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model BotConfigVersion {
+  id          String    @id @default(cuid())
+  botConfigId String
+  version     Int
+  configJson  Json
+  changelog   String?
+  createdAt   DateTime  @default(now())
+  createdBy   String?
+  botConfig   BotConfig @relation(fields: [botConfigId], references: [id], onDelete: Cascade)
+
+  @@unique([botConfigId, version])
+  @@index([botConfigId])
+}
+
+model Conversation {
+  id            String             @id @default(cuid())
+  companyId     String
+  botConfigId   String?
+  sessionId     String
+  visitorId     String?
+  status        ConversationStatus @default(ACTIVE)
+  intent        ConversationIntent @default(UNKNOWN)
+  collectedData Json?
+  skippedFields String[]
+  metadata      Json?
+  startedAt     DateTime           @default(now())
+  lastMessageAt DateTime           @default(now())
+  completedAt   DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  botConfig     BotConfig?         @relation(fields: [botConfigId], references: [id])
+  company       Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lead          Lead?
+  messages      Message[]
+  tokenUsages   TokenUsage[]
+
+  @@index([companyId, status])
+  @@index([companyId, createdAt])
+  @@index([sessionId])
+  @@index([botConfigId])
+}
+
+model Message {
+  id               String              @id @default(cuid())
+  conversationId   String
+  role             MessageRole
+  content          String
+  intent           ConversationIntent?
+  intentConfidence Float?
+  extractedData    Json?
+  timestamp        DateTime            @default(now())
+  conversation     Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, timestamp])
+}
+
+model Lead {
+  id             String       @id @default(cuid())
+  companyId      String
+  conversationId String       @unique
+  name           String?
+  email          String?
+  phone          String?
+  customFields   Json?
+  score          Int          @default(0)
+  completeness   Float        @default(0)
+  status         LeadStatus   @default(NEW)
+  notes          String?
+  tags           String[]
+  sourceUrl      String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  company        Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([companyId, createdAt])
+  @@index([email])
+}
+
+model TokenUsage {
+  id               String         @id @default(cuid())
+  companyId        String
+  conversationId   String?
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  cost             Float          @default(0)
+  model            String
+  operation        TokenOperation
+  timestamp        DateTime       @default(now())
+  company          Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation     Conversation?  @relation(fields: [conversationId], references: [id])
+
+  @@index([companyId, timestamp])
+  @@index([conversationId])
+}
+
+model FileUpload {
+  id            String   @id @default(cuid())
+  companyId     String?
+  filename      String
+  mimeType      String
+  size          Int
+  data          String
+  thumbnailData String?
+  usedBy        String?
+  usedById      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([usedBy, usedById])
+}
+
+model EmbedScript {
+  id            String   @id @default(cuid())
+  companyId     String   @unique
+  scriptContent String
+  scriptHash    String
+  cdnUrl        String?
+  settings      Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model SandboxSession {
+  id            String   @id @default(cuid())
+  botConfigId   String
+  messages      Json
+  collectedData Json?
+  skippedFields String[]
+  testName      String?
+  testNotes     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  expiresAt     DateTime
+
+  @@index([botConfigId])
+  @@index([expiresAt])
+}
+
+model VoiceSample {
+  id         String   @id @default(cuid())
+  voiceId    String   @unique
+  voiceName  String
+  audioData  Bytes?
+  sampleText String?
+  durationMs Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model AuditLog {
+  id           String        @id @default(cuid())
+  userId       String?
+  companyId    String?
+  action       AuditAction
+  category     AuditCategory
+  resourceType String
+  resourceId   String?
+  description  String
+  metadata     Json?
+  ipAddress    String?
+  userAgent    String?
+  requestId    String?
+  timestamp    DateTime      @default(now())
+  company      Company?      @relation(fields: [companyId], references: [id])
+  user         User?         @relation(fields: [userId], references: [id])
+
+  @@index([companyId, timestamp])
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
+  @@index([resourceType, resourceId])
+}
+
+model Notification {
+  id          String               @id @default(cuid())
+  userId      String
+  type        NotificationType
+  title       String
+  message     String
+  actionUrl   String?
+  actionLabel String?
+  metadata    Json?
+  read        Boolean              @default(false)
+  readAt      DateTime?
+  dismissed   Boolean              @default(false)
+  emailSent   Boolean              @default(false)
+  emailSentAt DateTime?
+  priority    NotificationPriority @default(NORMAL)
+  expiresAt   DateTime?
+  createdAt   DateTime             @default(now())
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read, createdAt])
+  @@index([type, createdAt])
+}
+
+model EmailQueue {
+  id           String        @id @default(cuid())
+  toEmail      String
+  toName       String?
+  template     EmailTemplate
+  subject      String
+  variables    Json
+  status       EmailStatus   @default(PENDING)
+  attempts     Int           @default(0)
+  maxAttempts  Int           @default(3)
+  lastError    String?
+  sentAt       DateTime?
+  openedAt     DateTime?
+  clickedAt    DateTime?
+  scheduledFor DateTime      @default(now())
+  createdAt    DateTime      @default(now())
+
+  @@index([status, scheduledFor])
+  @@index([toEmail])
+}
+
+enum ContainerStatus {
+  PENDING
+  RUNNING
+  STOPPED
+  RESTARTING
+  ERROR
+  REMOVING
+}
+
+enum HealthStatus {
+  UNKNOWN
+  HEALTHY
+  UNHEALTHY
+  STARTING
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPERADMIN
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+}
+
+enum Environment {
+  DEVELOPMENT
+  STAGING
+  PRODUCTION
+}
+
+enum AvatarType {
+  IMAGE
+  GIF
+}
+
+enum WidgetPosition {
+  BOTTOM_RIGHT
+  BOTTOM_LEFT
+}
+
+enum ConversationStatus {
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+enum ConversationIntent {
+  UNKNOWN
+  EXPLORATORY
+  ACTION
+  SUPPORT
+  OTHER
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+}
+
+enum TokenOperation {
+  RESPONSE
+  INTENT_DETECTION
+  DATA_EXTRACTION
+  CONFIG_GENERATION
+}
+
+enum AuditAction {
+  USER_SIGNUP
+  USER_LOGIN
+  USER_LOGOUT
+  USER_PASSWORD_CHANGE
+  USER_PASSWORD_RESET
+  USER_EMAIL_VERIFIED
+  COMPANY_CREATED
+  COMPANY_UPDATED
+  COMPANY_DELETED
+  API_KEY_REGENERATED
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_UPGRADED
+  SUBSCRIPTION_DOWNGRADED
+  SUBSCRIPTION_CANCELED
+  SUBSCRIPTION_RENEWED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  BOT_CONFIG_CREATED
+  BOT_CONFIG_UPDATED
+  BOT_CONFIG_DELETED
+  BOT_CONFIG_PUBLISHED
+  BOT_CONFIG_ACTIVATED
+  BOT_CONFIG_DEACTIVATED
+  BOT_CONFIG_ROLLBACK
+  LEAD_STATUS_CHANGED
+  LEAD_EXPORTED
+  LEAD_DELETED
+  WIDGET_SCRIPT_GENERATED
+  WIDGET_SETTINGS_UPDATED
+  SUSPICIOUS_ACTIVITY
+  RATE_LIMIT_EXCEEDED
+  INVALID_API_KEY_USED
+  DOMAIN_BLOCKED
+}
+
+enum AuditCategory {
+  AUTHENTICATION
+  ACCOUNT
+  BILLING
+  BOT_CONFIG
+  LEADS
+  WIDGET
+  SECURITY
+  SYSTEM
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELED
+}
+
+enum PaymentMethod {
+  CARD
+  BANK_TRANSFER
+  PAYPAL
+  OTHER
+}
+
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
+}
+
+enum NotificationType {
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_UPGRADED
+  SUBSCRIPTION_DOWNGRADED
+  SUBSCRIPTION_EXPIRING
+  SUBSCRIPTION_EXPIRED
+  SUBSCRIPTION_CANCELED
+  TRIAL_ENDING
+  TRIAL_ENDED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  PAYMENT_METHOD_EXPIRING
+  INVOICE_AVAILABLE
+  USAGE_80_PERCENT
+  USAGE_100_PERCENT
+  USAGE_OVERAGE
+  NEW_LEAD
+  DAILY_LEAD_SUMMARY
+  BOT_ACTIVATED
+  BOT_DEACTIVATED
+  BOT_ERROR
+  NEW_LOGIN
+  PASSWORD_CHANGED
+  API_KEY_REGENERATED
+  SCHEDULED_MAINTENANCE
+  FEATURE_ANNOUNCEMENT
+  WELCOME
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum EmailTemplate {
+  WELCOME
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  SUBSCRIPTION_CONFIRMATION
+  SUBSCRIPTION_UPGRADED
+  SUBSCRIPTION_DOWNGRADED
+  SUBSCRIPTION_CANCELED
+  SUBSCRIPTION_EXPIRING_SOON
+  SUBSCRIPTION_EXPIRED
+  TRIAL_ENDING_SOON
+  TRIAL_ENDED
+  PAYMENT_RECEIPT
+  PAYMENT_FAILED
+  INVOICE_AVAILABLE
+  PAYMENT_METHOD_EXPIRING
+  USAGE_WARNING_80
+  USAGE_LIMIT_REACHED
+  NEW_LEAD_NOTIFICATION
+  DAILY_LEAD_DIGEST
+  WEEKLY_LEAD_DIGEST
+  MAINTENANCE_SCHEDULED
+  FEATURE_ANNOUNCEMENT
+}
+
+enum EmailStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  BOUNCED
+}
